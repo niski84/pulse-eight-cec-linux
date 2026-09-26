@@ -17,6 +17,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: 'stable'
+          cache: false
       - run: go test ./...
       - run: go vet ./...
 
@@ -29,6 +30,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: 'stable'
+          cache: false
       - name: Build portable artifacts
         run: |
           set -euo pipefail
