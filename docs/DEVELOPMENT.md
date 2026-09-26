@@ -8,23 +8,15 @@ go test ./...
 go vet ./...
 ```
 
-The daemon and CLI are intentionally being extracted in stages. Do not add a
-second process that opens `/dev/ttyACM0`; adapter ownership belongs to the core
-service.
+The daemon owns the adapter. Do not start a second process that opens it while
+the service is running. Leave `P8CEC_DEVICE` unset while testing automatic
+discovery.
 
-## Reference machine
+## Validation environment
 
-The current validation machine is KDE neon on an x86-64 HTPC with:
-
-- Pulse-Eight USB CEC Adapter v12
-- USB identity `2548:1002`
-- libCEC 6.x
-- HDMI CEC routed through an LG TV
-- Plasma Bigscreen on Wayland
-- `/dev/uinput` input injection
-
-Use the reference findings in the workspace infrastructure notes, but keep
-machine-specific paths and credentials out of this repository.
+Validation uses a Linux desktop with libCEC, a Pulse-Eight USB HDMI-CEC
+adapter, an HDMI-CEC display path, and `/dev/uinput`. Device paths, USB product
+identifiers, and credentials are not runtime requirements.
 
 ## Testing strategy
 

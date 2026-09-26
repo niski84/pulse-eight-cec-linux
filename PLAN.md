@@ -46,10 +46,10 @@ The next deployment must remain in shadow mode until all of these are proven:
 
 ## Phase 4 — public release
 
-- [ ] Choose final repository owner/name
+- [x] Choose final repository owner/name
 - [ ] Add project screenshots and HDMI wiring diagram
-- [ ] Publish compatibility matrix
-- [ ] Tag `v0.1.0`
+- [x] Publish compatibility matrix
+- [x] Tag `v0.1.0`
 - [ ] Share the project with Pulse-Eight hardware maintainers
 
 ## Design constraints

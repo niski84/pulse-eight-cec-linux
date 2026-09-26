@@ -3,7 +3,7 @@
 ## Adapter is busy
 
 ```bash
-fuser -v /dev/ttyACM0
+fuser -v /dev/ttyACM*
 systemctl --user status pulse-eight-cec
 ```
 

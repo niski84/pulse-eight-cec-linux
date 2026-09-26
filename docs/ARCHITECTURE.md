@@ -63,10 +63,10 @@ After suspend or resume it must reopen the adapter exactly once. A diagnostic
 command can temporarily stop the service, but normal applications must never
 need to compete for the serial device.
 
-## Reference findings
+## Compatibility boundary
 
-The first implementation is based on the documented findings in
-`/home/nick/goprojects/infrastructure/htpc-hdmi-cec-findings.md`: Pulse-Eight
-adapter `2548:1002`, libCEC 6.x, CEC recording-device address `1`, and a
-`/dev/uinput` virtual keyboard. Those findings are evidence for the design, not
-runtime assumptions that should be hard-coded into the final project.
+The runtime depends on libCEC for adapter discovery and CEC transport, and on
+Linux uinput for desktop input delivery. It does not depend on a specific USB
+product ID, tty name, desktop shell, compositor, media center, or television
+model. An explicit `P8CEC_DEVICE` path is available only for hosts with more
+than one adapter.

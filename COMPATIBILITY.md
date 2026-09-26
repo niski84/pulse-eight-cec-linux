@@ -3,21 +3,21 @@
 This project separates hardware validation from desktop integration. A row is
 only marked working after a real adapter and HDMI path have been tested.
 
-## Reference configuration
+## Tested configuration
 
 | Component | Tested setup | Status |
 |---|---|---|
-| Adapter | Pulse-Eight USB CEC Adapter v12 (`2548:1002`) | Working reference |
-| OS | KDE neon / Ubuntu 24.04 base | Working reference |
-| Session | Plasma Bigscreen, Wayland | Working reference |
-| TV | LG TV | Working reference |
+| Adapter | Pulse-Eight USB HDMI-CEC adapter | Tested hardware |
+| OS | Ubuntu 24.04-based Linux | Tested host |
+| Session | Plasma Bigscreen, Wayland | Tested desktop |
+| TV | HDMI-CEC television | Tested display class |
 | Output | `/dev/uinput` virtual keyboard | Working reference |
 
 ## Target validation
 
 | Environment | Status | Notes |
 |---|---|---|
-| KDE Plasma Wayland | Reference validation | Extracted from HTPC implementation |
+| KDE Plasma Wayland | Validated | uinput input path |
 | KDE Plasma X11 | Planned | Validate uinput delivery |
 | GNOME Wayland | Planned | Validate compositor media-key handling |
 | XFCE X11 | Planned | Validate keyboard navigation and media keys |
