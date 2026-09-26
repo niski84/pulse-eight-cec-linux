@@ -1,0 +1,16 @@
+[Unit]
+Description=Pulse-Eight HDMI-CEC input bridge
+After=graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/pulse-eight-cec daemon
+Restart=on-failure
+RestartSec=3
+Environment=P8CEC_SOCKET=%t/pulse-eight-cec.sock
+Environment=P8CEC_LOG_LEVEL=info
+UMask=0077
+
+[Install]
+WantedBy=default.target

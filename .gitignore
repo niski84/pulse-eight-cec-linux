@@ -1,0 +1,9 @@
+pulse-eight-cec-linux
+*.log
+.env
+.env.*
+/.pulse-eight-cec-linux
+/pulse-eight-cec-linux
+/*.log
+/*.pid
+dist/
