@@ -15,24 +15,30 @@ import (
 	"time"
 
 	"github.com/niski84/pulse-eight-cec-linux/internal/cec"
+	"github.com/niski84/pulse-eight-cec-linux/internal/policy"
 )
 
 type Handler func(context.Context, cec.Action) error
 
 // Status describes the running bridge, not just installed prerequisites.
 type Status struct {
-	AdapterReady bool   `json:"adapter_ready"`
-	InputReady   bool   `json:"input_ready"`
-	Shadow       bool   `json:"shadow"`
-	Received     uint64 `json:"received_keys"`
-	Forwarded    uint64 `json:"forwarded_keys"`
-	Unsupported  uint64 `json:"unsupported_keys"`
+	AdapterReady  bool   `json:"adapter_ready"`
+	InputReady    bool   `json:"input_ready"`
+	Shadow        bool   `json:"shadow"`
+	Received      uint64 `json:"received_keys"`
+	Forwarded     uint64 `json:"forwarded_keys"`
+	Unsupported   uint64 `json:"unsupported_keys"`
+	Ignored       uint64 `json:"ignored_keys"`
+	ActiveProfile string `json:"active_profile,omitempty"`
 }
 
 type response struct {
-	OK     bool    `json:"ok"`
-	Error  string  `json:"error,omitempty"`
-	Status *Status `json:"status,omitempty"`
+	OK       bool              `json:"ok"`
+	Error    string            `json:"error,omitempty"`
+	Status   *Status           `json:"status,omitempty"`
+	Profile  string            `json:"active_profile,omitempty"`
+	Profiles []string          `json:"profiles,omitempty"`
+	Trace    []policy.Decision `json:"trace,omitempty"`
 }
 
 type Server struct {
@@ -40,6 +46,12 @@ type Server struct {
 	handler Handler
 	ln      net.Listener
 	status  func() Status
+	policy  *policy.Engine
+}
+
+func (s *Server) WithPolicy(engine *policy.Engine) *Server {
+	s.policy = engine
+	return s
 }
 
 func (s *Server) WithStatus(status func() Status) *Server {
@@ -124,6 +136,8 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 	var request struct {
 		Command string `json:"command"`
 		Action  string `json:"action"`
+		Profile string `json:"profile"`
+		Limit   int    `json:"limit"`
 	}
 	reply := response{}
 	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&request); err != nil {
@@ -131,6 +145,23 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 	} else if request.Command == "status" && s.status != nil {
 		status := s.status()
 		reply.OK, reply.Status = true, &status
+	} else if request.Command == "profiles" && s.policy != nil {
+		reply.OK, reply.Profiles = true, s.policy.Profiles()
+	} else if request.Command == "profile" && s.policy != nil {
+		if request.Profile != "" {
+			if err := s.policy.SetProfile(request.Profile); err != nil {
+				reply.Error = err.Error()
+			}
+		}
+		if reply.Error == "" {
+			reply.OK, reply.Profile = true, s.policy.ActiveProfile()
+		}
+	} else if request.Command == "trace" && s.policy != nil {
+		if request.Limit < 0 || request.Limit > 50 {
+			reply.Error = "trace limit must be between 0 and 50"
+		} else {
+			reply.OK, reply.Trace = true, s.policy.Trace(request.Limit)
+		}
 	} else if request.Command != "" && request.Command != "key" {
 		reply.Error = "unsupported command"
 	} else if err := s.handler(ctx, cec.Action(strings.ToLower(strings.TrimSpace(request.Action)))); err != nil {
@@ -159,7 +190,29 @@ func ReadStatus(path string) (Status, error) {
 	return *reply.Status, nil
 }
 
-func exchange(path string, request map[string]string) (response, error) {
+func ReadProfiles(path string) ([]string, error) {
+	reply, err := exchange(path, map[string]string{"command": "profiles"})
+	return reply.Profiles, err
+}
+
+// SelectProfile queries the active activity when name is empty, or changes it.
+func SelectProfile(path, name string) (string, error) {
+	reply, err := exchange(path, map[string]string{"command": "profile", "profile": name})
+	return reply.Profile, err
+}
+
+func ReadTrace(path string, limit int) ([]policy.Decision, error) {
+	reply, err := exchange(path, map[string]any{"command": "trace", "limit": limit})
+	if err != nil {
+		return nil, err
+	}
+	if reply.Trace == nil {
+		return []policy.Decision{}, nil
+	}
+	return reply.Trace, nil
+}
+
+func exchange(path string, request any) (response, error) {
 	conn, err := net.DialTimeout("unix", path, time.Second)
 	if err != nil {
 		return response{}, err

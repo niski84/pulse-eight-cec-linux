@@ -20,6 +20,11 @@ const (
 
 // Open creates a virtual keyboard backed by Linux's uinput device.
 func Open(path string) (*Device, error) {
+	return OpenWithKeys(path, nil)
+}
+
+// OpenWithKeys enables configured profile chords in addition to default keys.
+func OpenWithKeys(path string, extraKeys []uint16) (*Device, error) {
 	if path == "" {
 		path = defaultDevicePath
 	}
@@ -28,12 +33,20 @@ func Open(path string) (*Device, error) {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 
-	keys := supportedKeys()
+	keys := append(supportedKeys(), extraKeys...)
+	capabilities := make(map[uint16]bool)
+	for _, key := range keys {
+		if key == 0 || key > 0x2ff {
+			_ = file.Close()
+			return nil, fmt.Errorf("invalid uinput capability key %d", key)
+		}
+		capabilities[key] = true
+	}
 	if err := ioctl(file.Fd(), uiSetEvbit, eventTypeKey); err != nil {
 		_ = file.Close()
 		return nil, fmt.Errorf("enable evdev key events: %w", err)
 	}
-	for _, key := range keys {
+	for key := range capabilities {
 		if err := ioctl(file.Fd(), uiSetKeybit, uintptr(key)); err != nil {
 			_ = file.Close()
 			return nil, fmt.Errorf("enable evdev key %d: %w", key, err)
@@ -48,9 +61,11 @@ func Open(path string) (*Device, error) {
 		return nil, fmt.Errorf("create uinput device: %w", err)
 	}
 
-	return newDevice(file, func() error {
+	device := newDevice(file, func() error {
 		return ioctl(file.Fd(), uiDevDestroy, 0)
-	}), nil
+	})
+	device.keys = capabilities
+	return device, nil
 }
 
 func ioctl(fd uintptr, request uintptr, value uintptr) error {

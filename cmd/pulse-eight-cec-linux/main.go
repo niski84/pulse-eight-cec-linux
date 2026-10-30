@@ -19,6 +19,7 @@ import (
 	"github.com/niski84/pulse-eight-cec-linux/internal/cec"
 	"github.com/niski84/pulse-eight-cec-linux/internal/cecclient"
 	"github.com/niski84/pulse-eight-cec-linux/internal/control"
+	"github.com/niski84/pulse-eight-cec-linux/internal/policy"
 	"github.com/niski84/pulse-eight-cec-linux/internal/uinput"
 )
 
@@ -35,6 +36,14 @@ func main() {
 		err = runDaemon(os.Args[2:])
 	case "status":
 		err = runStatus()
+	case "profiles":
+		err = runProfiles(os.Args[2:])
+	case "profile":
+		err = runProfile(os.Args[2:])
+	case "trace":
+		err = runTrace(os.Args[2:])
+	case "explain":
+		err = runExplain(os.Args[2:])
 	case "serve":
 		err = runHTTPServer()
 	case "help", "-h", "--help":
@@ -53,11 +62,11 @@ func runKey(args []string) error {
 	if len(args) != 1 {
 		return errors.New("usage: pulse-eight-cec key <action>")
 	}
-	action := parseAction(args[0])
-	if action == "" {
-		return fmt.Errorf("unknown action %q", args[0])
+	input := normalizeInput(args[0])
+	if _, err := policy.ParseInput(input); err != nil {
+		return err
 	}
-	if err := control.Send(controlSocketPath(), action); err != nil {
+	if err := control.Send(controlSocketPath(), cec.Action(input)); err != nil {
 		return fmt.Errorf("send local key through running daemon (no adapter fallback): %w", err)
 	}
 	return nil
@@ -66,19 +75,24 @@ func runKey(args []string) error {
 func runDaemon(args []string) error {
 	flags := flag.NewFlagSet("daemon", flag.ContinueOnError)
 	shadow := flags.Bool("shadow", false, "decode and log remote keys without creating a keyboard")
+	config := flags.String("config", os.Getenv("P8CEC_CONFIG"), "activity profile JSON configuration")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("usage: pulse-eight-cec daemon [--shadow]")
+		return errors.New("usage: pulse-eight-cec daemon [--shadow] [--config path]")
+	}
+	engine, err := loadPolicy(*config)
+	if err != nil {
+		return err
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	state := &bridgeState{status: control.Status{Shadow: *shadow}}
+	state := &bridgeState{status: control.Status{Shadow: *shadow}, policy: engine}
 	var inputDevice *uinput.Device
 	if !*shadow {
 		var err error
-		inputDevice, err = uinput.Open(os.Getenv("P8CEC_UINPUT"))
+		inputDevice, err = uinput.OpenWithKeys(os.Getenv("P8CEC_UINPUT"), engine.RequiredKeys())
 		if err != nil {
 			return err
 		}
@@ -106,18 +120,19 @@ func runDaemon(args []string) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return inputDevice.SendAction(action)
+		return dispatchCLI(engine, action, inputDevice.SendChord)
 	})
 	if err != nil {
 		return err
 	}
 	controlServer.WithStatus(state.snapshot)
+	controlServer.WithPolicy(engine)
 	controlErrors := make(chan error, 1)
 	go func() { controlErrors <- controlServer.Run(ctx) }()
 	log.Printf("bridge ready: shadow=%t input_ready=%t socket=%s", *shadow, !*shadow, controlSocketPath())
-	var send func(cec.KeyCode) error
+	var send func([]uint16) error
 	if inputDevice != nil {
-		send = inputDevice.SendKeyCode
+		send = inputDevice.SendChord
 	}
 	err = forwardKeys(ctx, adapter.Events(), adapter.Errors(), controlErrors, send, state)
 	cancel()
@@ -127,17 +142,29 @@ func runDaemon(args []string) error {
 type bridgeState struct {
 	mu     sync.Mutex
 	status control.Status
+	policy *policy.Engine
 }
 
 func (s *bridgeState) snapshot() control.Status {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.status
+	status := s.status
+	s.mu.Unlock()
+	if s.policy != nil {
+		status.ActiveProfile = s.policy.ActiveProfile()
+	}
+	return status
 }
 
-// forwardKeys is shared by normal and shadow operation. Only received frames
-// enter this path; synthetic CLI keys go directly to the local virtual keyboard.
-func forwardKeys(ctx context.Context, events <-chan cec.KeyCode, adapterErrors, controlErrors <-chan error, send func(cec.KeyCode) error, state *bridgeState) error {
+// forwardKeys is shared by normal and shadow operation. Remote and CLI inputs
+// share the policy engine; only received frames increment the remote counters.
+func forwardKeys(ctx context.Context, events <-chan cec.KeyCode, adapterErrors, controlErrors <-chan error, send func([]uint16) error, state *bridgeState) error {
+	engine := state.policy
+	if engine == nil {
+		engine = policy.NewDefault()
+	}
+	state.mu.Lock()
+	shadow := state.status.Shadow
+	state.mu.Unlock()
 	for {
 		select {
 		case <-ctx.Done():
@@ -162,25 +189,44 @@ func forwardKeys(ctx context.Context, events <-chan cec.KeyCode, adapterErrors, 
 			state.mu.Lock()
 			state.status.Received++
 			state.mu.Unlock()
-			if _, supported := uinput.KeyCodeToEvdev(key); !supported {
+			decision, err := engine.Dispatch(uint8(key), "remote", shadow, send)
+			if err != nil {
+				return fmt.Errorf("forward remote input=%s profile=%s: %w", decision.Input, decision.Profile, err)
+			}
+			switch decision.Outcome {
+			case policy.Unmapped:
 				state.mu.Lock()
 				state.status.Unsupported++
 				state.mu.Unlock()
 				log.Printf("ignoring unmapped remote key 0x%02x", key)
-				continue
+			case policy.Ignored:
+				state.mu.Lock()
+				state.status.Ignored++
+				state.mu.Unlock()
+			case policy.Shadow:
+				log.Printf("shadow: input=%s profile=%s reason=%s", decision.Input, decision.Profile, decision.Reason)
+			case policy.Forwarded:
+				state.mu.Lock()
+				state.status.Forwarded++
+				state.mu.Unlock()
 			}
-			if send == nil {
-				log.Printf("shadow: received remote key 0x%02x", key)
-				continue
-			}
-			if err := send(key); err != nil {
-				return fmt.Errorf("forward remote key: %w", err)
-			}
-			state.mu.Lock()
-			state.status.Forwarded++
-			state.mu.Unlock()
 		}
 	}
+}
+
+func dispatchCLI(engine *policy.Engine, action cec.Action, send func([]uint16) error) error {
+	key, err := policy.ParseInput(normalizeInput(string(action)))
+	if err != nil {
+		return err
+	}
+	decision, err := engine.Dispatch(uint8(key), "cli", false, send)
+	if err != nil {
+		return err
+	}
+	if decision.Outcome == policy.Unmapped {
+		return fmt.Errorf("unmapped input %s", decision.Input)
+	}
+	return nil
 }
 
 func runStatus() error {
@@ -226,14 +272,8 @@ func controlSocketPath() string {
 	return envOr("P8CEC_SOCKET", filepath.Join(runtimeDir, "pulse-eight-cec.sock"))
 }
 
-func parseAction(value string) cec.Action {
-	value = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "-", "_"))
-	for action := range cec.DefaultKeyMap() {
-		if string(action) == value {
-			return action
-		}
-	}
-	return ""
+func normalizeInput(value string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "-", "_"))
 }
 
 func envOr(name, fallback string) string {
@@ -259,6 +299,10 @@ Usage:
   pulse-eight-cec daemon --shadow  Log received keys without injecting input
   pulse-eight-cec key <action> Inject a local key through the running daemon
   pulse-eight-cec status       Report live daemon state and local prerequisites
+  pulse-eight-cec profiles     List configured activities in the running daemon
+  pulse-eight-cec profile [name]  Query or select an activity without reopening CEC
+  pulse-eight-cec trace [--limit 20]  Show recent input decisions
+  pulse-eight-cec explain [--config path] [--profile name] <input>  Preview offline
   pulse-eight-cec serve        Run the local health endpoint
 
 Actions include: up, down, left, right, select, play, pause, stop,

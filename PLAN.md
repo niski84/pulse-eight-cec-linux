@@ -67,6 +67,20 @@ The next deployment must remain in shadow mode until all of these are proven:
 
 ## Phase 4 — public release
 
+### Activity-profile increment — 2026-10-30
+
+- [x] Explicit activity selection without adapter restart.
+- [x] Validated key-chord and ignore bindings; defaults preserved when unbound.
+- [x] Shared policy for remote and synthetic CLI inputs.
+- [x] Bounded decision trace and hardware-free explain command.
+- [x] Simulated process/socket and output-event tests.
+- [ ] Physical validation of configured shortcuts on the reference HTPC.
+- [ ] Compare the same policy needs with a kernel-backed setup.
+
+Feature development is on a separate branch above the repair. The HTPC remains
+on its existing working handler. See `docs/CONTROL-LAYER.md` for rationale and
+unimplemented experiments; do not present those experiments as release features.
+
 - [x] Choose final repository owner/name
 - [ ] Add project screenshots and HDMI wiring diagram
 - [x] Publish compatibility matrix

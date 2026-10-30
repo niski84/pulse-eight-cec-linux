@@ -1,0 +1,23 @@
+{
+  "default_profile": "desktop",
+  "profiles": {
+    "desktop": {
+      "bindings": {}
+    },
+    "browser": {
+      "bindings": {
+        "exit": { "keys": ["KEY_LEFTALT", "KEY_LEFT"] },
+        "root_menu": { "keys": ["KEY_LEFTCTRL", "KEY_L"] },
+        "power": { "ignore": true }
+      }
+    },
+    "presentation": {
+      "bindings": {
+        "up": { "keys": ["KEY_PAGEUP"] },
+        "down": { "keys": ["KEY_PAGEDOWN"] },
+        "select": { "keys": ["KEY_SPACE"] },
+        "power": { "ignore": true }
+      }
+    }
+  }
+}
