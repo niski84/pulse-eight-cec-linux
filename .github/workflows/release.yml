@@ -18,8 +18,10 @@ jobs:
         with:
           go-version: 'stable'
           cache: false
-      - run: go test ./...
+      - run: go test -race ./...
       - run: go vet ./...
+      - run: bash -n scripts/install.sh scripts/reload.sh
+      - run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -38,14 +40,18 @@ jobs:
           for target in 'linux amd64' 'linux arm64'; do
             set -- $target
             mkdir -p "dist/pulse-eight-cec-linux-$1-$2"
-            GOOS=$1 GOARCH=$2 go build -trimpath -ldflags='-s -w' -o "dist/pulse-eight-cec-linux-$1-$2/pulse-eight-cec" ./cmd/pulse-eight-cec-linux
-            cp README.md LICENSE dist/pulse-eight-cec-linux-$1-$2/
+            CGO_ENABLED=0 GOOS=$1 GOARCH=$2 go build -trimpath -ldflags='-s -w' -o "dist/pulse-eight-cec-linux-$1-$2/pulse-eight-cec" ./cmd/pulse-eight-cec-linux
+            cp README.md CHANGELOG.md LICENSE dist/pulse-eight-cec-linux-$1-$2/
+            cp -r packaging docs scripts dist/pulse-eight-cec-linux-$1-$2/
+            cp COMPATIBILITY.md dist/pulse-eight-cec-linux-$1-$2/
+            ln -s pulse-eight-cec "dist/pulse-eight-cec-linux-$1-$2/pulse-eight-cecctl"
             tar -C dist -czf "dist/pulse-eight-cec-linux-$1-$2.tar.gz" "pulse-eight-cec-linux-$1-$2"
           done
           (cd dist && sha256sum *.tar.gz > SHA256SUMS)
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS

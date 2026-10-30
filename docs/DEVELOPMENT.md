@@ -1,11 +1,13 @@
 # Development
 
-## Build the scaffold
+## Build and check the repair
 
 ```bash
 go build ./...
-go test ./...
+go test -race ./...
 go vet ./...
+bash -n scripts/install.sh scripts/reload.sh
+python3 -m unittest discover -s scripts -p 'test_*.py' -v
 ```
 
 The daemon owns the adapter. Do not start a second process that opens it while
@@ -30,5 +32,7 @@ identifiers, and credentials are not runtime requirements.
 
 Do not run a second `cec-client` while the service owns the adapter. If direct
 bus inspection is necessary, stop the user service first and restart it
-afterward. The daemon's `key` command uses the Unix socket when the daemon is
-running, so it does not compete for the adapter.
+afterward. The daemon's `key` command uses only the Unix socket and injects into
+the local keyboard. If the daemon is absent or in shadow mode, it fails without
+opening an adapter. `daemon --shadow` still owns the adapter and cannot run
+alongside the existing handler. See `SHADOW-VALIDATION.md` for a scheduled test.

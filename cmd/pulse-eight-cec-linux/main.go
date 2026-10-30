@@ -4,12 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/niski84/pulse-eight-cec-linux/internal/cec"
@@ -28,7 +32,7 @@ func main() {
 	case "key":
 		err = runKey(os.Args[2:])
 	case "daemon":
-		err = runDaemon()
+		err = runDaemon(os.Args[2:])
 	case "status":
 		err = runStatus()
 	case "serve":
@@ -53,62 +57,87 @@ func runKey(args []string) error {
 	if action == "" {
 		return fmt.Errorf("unknown action %q", args[0])
 	}
-	adapter, err := (cecclient.Factory{Config: loadCECConfig()}).NewAdapter(context.Background())
-	if err != nil {
-		return err
+	if err := control.Send(controlSocketPath(), action); err != nil {
+		return fmt.Errorf("send local key through running daemon (no adapter fallback): %w", err)
 	}
-	if err := control.Send(controlSocketPath(), action); err == nil {
-		return nil
-	}
-	session, err := cec.NewSession(adapter, cec.DefaultKeyMap())
-	if err != nil {
-		return err
-	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
-	if err := session.Open(ctx); err != nil {
-		return err
-	}
-	defer session.Close()
-	socket, err := control.New(controlSocketPath(), session.SendAction)
-	if err != nil {
-		return err
-	}
-	go func() { _ = socket.Run(ctx) }()
-	return session.SendAction(ctx, action)
+	return nil
 }
 
-func runDaemon() error {
-	adapter, err := (cecclient.Factory{Config: loadCECConfig()}).NewAdapter(context.Background())
-	if err != nil {
+func runDaemon(args []string) error {
+	flags := flag.NewFlagSet("daemon", flag.ContinueOnError)
+	shadow := flags.Bool("shadow", false, "decode and log remote keys without creating a keyboard")
+	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	session, err := cec.NewSession(adapter, cec.DefaultKeyMap())
-	if err != nil {
-		return err
+	if flags.NArg() != 0 {
+		return errors.New("usage: pulse-eight-cec daemon [--shadow]")
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	if err := session.Open(ctx); err != nil {
+	state := &bridgeState{status: control.Status{Shadow: *shadow}}
+	var inputDevice *uinput.Device
+	if !*shadow {
+		var err error
+		inputDevice, err = uinput.Open(os.Getenv("P8CEC_UINPUT"))
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err := inputDevice.Close(); err != nil {
+				log.Printf("close keyboard: %v", err)
+			}
+		}()
+		state.status.InputReady = true
+	}
+	adapter := cecclient.New(loadCECConfig())
+	if err := adapter.Open(ctx); err != nil {
 		return err
 	}
-	defer session.Close()
-	controlServer, err := control.New(controlSocketPath(), session.SendAction)
+	defer func() {
+		if err := adapter.Close(); err != nil {
+			log.Printf("close adapter: %v", err)
+		}
+	}()
+	state.status.AdapterReady = true
+	controlServer, err := control.New(controlSocketPath(), func(ctx context.Context, action cec.Action) error {
+		if *shadow {
+			return errors.New("shadow mode does not inject keys")
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return inputDevice.SendAction(action)
+	})
 	if err != nil {
 		return err
 	}
+	controlServer.WithStatus(state.snapshot)
 	controlErrors := make(chan error, 1)
 	go func() { controlErrors <- controlServer.Run(ctx) }()
-	inputDevice, err := uinput.Open(os.Getenv("P8CEC_UINPUT"))
-	if err != nil {
-		return err
+	log.Printf("bridge ready: shadow=%t input_ready=%t socket=%s", *shadow, !*shadow, controlSocketPath())
+	var send func(cec.KeyCode) error
+	if inputDevice != nil {
+		send = inputDevice.SendKeyCode
 	}
-	defer inputDevice.Close()
-	events, ok := adapter.(interface{ Events() <-chan cec.KeyCode })
-	if !ok {
-		<-ctx.Done()
-		return nil
-	}
+	err = forwardKeys(ctx, adapter.Events(), adapter.Errors(), controlErrors, send, state)
+	cancel()
+	return err
+}
+
+type bridgeState struct {
+	mu     sync.Mutex
+	status control.Status
+}
+
+func (s *bridgeState) snapshot() control.Status {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.status
+}
+
+// forwardKeys is shared by normal and shadow operation. Only received frames
+// enter this path; synthetic CLI keys go directly to the local virtual keyboard.
+func forwardKeys(ctx context.Context, events <-chan cec.KeyCode, adapterErrors, controlErrors <-chan error, send func(cec.KeyCode) error, state *bridgeState) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -118,13 +147,38 @@ func runDaemon() error {
 				return fmt.Errorf("control socket: %w", err)
 			}
 			return nil
-		case key, ok := <-events.Events():
+		case err, ok := <-adapterErrors:
+			if !ok {
+				adapterErrors = nil
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("adapter: %w", err)
+			}
+		case key, ok := <-events:
 			if !ok {
 				return errors.New("cec event stream closed")
 			}
-			if err := inputDevice.SendKeyCode(key); err != nil {
-				return err
+			state.mu.Lock()
+			state.status.Received++
+			state.mu.Unlock()
+			if _, supported := uinput.KeyCodeToEvdev(key); !supported {
+				state.mu.Lock()
+				state.status.Unsupported++
+				state.mu.Unlock()
+				log.Printf("ignoring unmapped remote key 0x%02x", key)
+				continue
 			}
+			if send == nil {
+				log.Printf("shadow: received remote key 0x%02x", key)
+				continue
+			}
+			if err := send(key); err != nil {
+				return fmt.Errorf("forward remote key: %w", err)
+			}
+			state.mu.Lock()
+			state.status.Forwarded++
+			state.mu.Unlock()
 		}
 	}
 }
@@ -140,12 +194,19 @@ func runStatus() error {
 		_, deviceErr := os.Stat(cfg.Device)
 		deviceAvailable = deviceErr == nil
 	}
-	return json.NewEncoder(os.Stdout).Encode(map[string]any{
+	status, daemonErr := control.ReadStatus(controlSocketPath())
+	if err := json.NewEncoder(os.Stdout).Encode(map[string]any{
 		"binary": cfg.Binary, "binary_available": binaryErr == nil,
 		"device": device, "device_available": deviceAvailable,
-		"discovery": "libCEC automatic adapter selection",
-		"source":    cfg.Source, "target": cfg.Target,
-	})
+		"discovery":      "libCEC automatic adapter selection",
+		"daemon_running": daemonErr == nil, "daemon": status,
+	}); err != nil {
+		return err
+	}
+	if daemonErr != nil {
+		return fmt.Errorf("daemon is not responding: %w", daemonErr)
+	}
+	return nil
 }
 
 func runHTTPServer() error {
@@ -156,13 +217,13 @@ func runHTTPServer() error {
 func loadCECConfig() cecclient.Config {
 	return cecclient.Config{
 		Binary: envOr("P8CEC_BINARY", "cec-client"), Device: strings.TrimSpace(os.Getenv("P8CEC_DEVICE")),
-		Source: envUint8("P8CEC_SOURCE", 0), Target: envUint8("P8CEC_TARGET", 1),
 		Debug: intFromEnv("P8CEC_DEBUG", 8),
 	}
 }
 
 func controlSocketPath() string {
-	return envOr("P8CEC_SOCKET", envOr("XDG_RUNTIME_DIR", "/tmp")+"/pulse-eight-cec.sock")
+	runtimeDir := envOr("XDG_RUNTIME_DIR", filepath.Join(os.TempDir(), "pulse-eight-cec-"+strconv.Itoa(os.Getuid())))
+	return envOr("P8CEC_SOCKET", filepath.Join(runtimeDir, "pulse-eight-cec.sock"))
 }
 
 func parseAction(value string) cec.Action {
@@ -182,14 +243,6 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
-func envUint8(name string, fallback uint8) uint8 {
-	value, err := strconv.ParseUint(os.Getenv(name), 0, 8)
-	if err != nil {
-		return fallback
-	}
-	return uint8(value)
-}
-
 func intFromEnv(name string, fallback int) int {
 	value, err := strconv.Atoi(os.Getenv(name))
 	if err != nil {
@@ -202,9 +255,10 @@ func printUsage() {
 	fmt.Println(`pulse-eight-cec — Linux Pulse-Eight HDMI-CEC bridge
 
 Usage:
-  pulse-eight-cec daemon       Own the adapter and monitor CEC events
-  pulse-eight-cec key <action> Send one CEC user-control key
-  pulse-eight-cec status       Report local adapter prerequisites
+  pulse-eight-cec daemon       Forward received remote keys to a Linux keyboard
+  pulse-eight-cec daemon --shadow  Log received keys without injecting input
+  pulse-eight-cec key <action> Inject a local key through the running daemon
+  pulse-eight-cec status       Report live daemon state and local prerequisites
   pulse-eight-cec serve        Run the local health endpoint
 
 Actions include: up, down, left, right, select, play, pause, stop,

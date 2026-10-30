@@ -1,49 +1,31 @@
 # Distribution
 
-## Release goals
+## Published versus repaired
 
-An owner of a Pulse-Eight adapter should be able to install the service without
-understanding libCEC internals, while advanced users can build it from source.
-Every release must include checksums and a short compatibility matrix.
+The published v0.1.0 archives predate the receive-path repair and failed physical
+remote validation. The repaired branch is not a hardware-validated release.
+Publish a release candidate for a scheduled hardware trial; record the result
+before promoting a stable compatibility claim. Tags containing a hyphen are
+marked prereleases by the workflow.
 
-## Artifact matrix
+## Archive contents
 
-The public release currently publishes:
+The repaired release workflow builds statically linked Go Linux binaries for
+amd64 and arm64. Each archive includes the CLI symlink, installer, user service,
+udev rule, documentation, compatibility statement, and license. SHA256SUMS
+covers the archives. Go is not needed to install an extracted binary archive;
+libCEC/cec-client and a systemd user session are still required.
 
-- Linux portable tarballs for `amd64` and `arm64`
-- Source archive and SHA-256 checksums
+The source installer builds from the module directory regardless of the caller's
+current directory. Both installation paths leave the service stopped, retain
+existing boot enablement, and print permission/test instructions. An already
+running bridge must be stopped before upgrading. Custom binary directories are
+reflected in the installed unit.
 
-Native package formats can be added later without changing the portable
-runtime or installer interface.
+## Checks and hardware gate
 
-## Installer behavior
-
-The installer:
-
-1. Checks Linux, Go, systemd, and libCEC prerequisites.
-2. Builds the binary and CLI from the tagged source.
-3. Installs the user service and vendor-level udev permissions.
-4. Reloads udev and systemd user units.
-5. Prints the next diagnostic commands.
-
-It must not overwrite an existing desktop input handler without an explicit
-confirmation, and it must clearly report when another process owns the adapter.
-
-## GitHub Actions
-
-Tagged releases run:
-
-1. Go build and unit tests
-2. Static analysis
-3. Cross-builds for `amd64` and `arm64`
-4. Checksum generation
-5. GitHub release publication
-
-Hardware validation remains a separate self-hosted or manual matrix because the
-CEC bus and Pulse-Eight adapter cannot be simulated completely in CI.
-
-## Public project presentation
-
-The README leads with installation, supported behavior, and hardware
-limitations. `COMPATIBILITY.md` records tested adapter firmware, distributions,
-desktop sessions, TVs, AV receivers, and applications.
+CI runs race-enabled Go tests, vet, shell syntax checks, and installer tests
+using disposable directories and mocked host tools. Portable cross-builds and
+checksums are separate from runtime validation. Distribution-specific native
+packages, clean-distro installation, physical input, hotplug, and suspend/resume
+are not yet validated. See `SHADOW-VALIDATION.md`.

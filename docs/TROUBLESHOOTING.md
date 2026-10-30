@@ -1,36 +1,46 @@
 # Troubleshooting
 
-## Adapter is busy
+## Adapter ownership
 
-```bash
-fuser -v /dev/ttyACM*
-systemctl --user status pulse-eight-cec
-```
+Exactly one handler should own the adapter. Do not start this service alongside
+Kodi's CEC handler, Plasma's handler, the kernel attachment path, or a separate
+cec-client process. Identify the current owner with `fuser -v /dev/ttyACM*`.
+Schedule a test before stopping it and retain a rollback command.
 
-Only one process may own the Pulse-Eight adapter. Stop competing diagnostic
-tools or desktop handlers before starting this service.
+The CLI `key` command never opens the adapter. If it reports no responding
+daemon, start or inspect the intended daemon instead of launching cec-client.
+In normal mode it injects locally; in shadow mode it rejects injection.
 
-## No remote events
+## Status and logs
 
-Confirm the TV is displaying the HDMI input connected through the adapter, then
-check:
+Use `pulse-eight-cecctl status` and `journalctl --user -u pulse-eight-cec -b`.
+Live status separates adapter readiness from uinput readiness and reports received,
+forwarded, and unsupported keys. An absent daemon gives a nonzero CLI exit code.
+HTTP `/api/health` only reports the separate health server's liveness.
 
-```bash
-pulse-eight-cecctl status
-journalctl --user -u pulse-eight-cec -b
-```
+## No received keys
 
-CEC routing depends on the TV, receiver, cable path, and active source state.
+Confirm the TV is showing the adapter's HDMI source and CEC is enabled. Start
+shadow mode only after the current owner releases the adapter. The daemon needs
+libCEC's registered-address NOTICE and ready prompt before it reports startup
+success. Automatic discovery is delegated to libCEC; set P8CEC_DEVICE when an
+explicit stable adapter path is required.
 
-## Input device exists but apps do not respond
+v0.1.0 incorrectly parsed outgoing traffic. Use the repaired branch for testing;
+creating a socket or sending a synthetic command is not evidence of reception.
 
-Check that the service created a uinput device and that the compositor is
-running. The uinput path is preferred because it works across Wayland and X11.
-Application-specific limitations should be recorded in `COMPATIBILITY.md`, not
-patched into the core daemon.
+## Received keys but no application response
 
-## Resume or hotplug failure
+In shadow mode zero forwarded keys is expected. In normal mode verify uinput
+permissions, the compositor's recognition of the virtual keyboard, and the
+application's keyboard shortcuts. Unsupported CEC codes are logged and counted.
+Applications such as Plexamp need not offer D-pad navigation even when keyboard
+events arrive correctly. Pause and Stop map to KEY_PAUSECD and KEY_STOPCD.
 
-Restart the user service once and inspect the journal. The service should reopen
-the adapter exactly once and report the resulting logical address. Repeated
-opens are a bug and should be reported with the complete startup log.
+## Restart, USB reconnect, and resume
+
+The systemd unit retries process failures after three seconds. Readiness checks
+reject unsuccessful child startup. USB recovery and actual suspend/resume still
+need hardware validation. If the process remains alive with a stale adapter
+connection, restart this user service once. Automatic stale-connection detection
+is not implemented; do not claim that it is.

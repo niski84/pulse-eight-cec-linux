@@ -6,20 +6,45 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/niski84/pulse-eight-cec-linux/internal/cec"
 )
 
 type Handler func(context.Context, cec.Action) error
 
+// Status describes the running bridge, not just installed prerequisites.
+type Status struct {
+	AdapterReady bool   `json:"adapter_ready"`
+	InputReady   bool   `json:"input_ready"`
+	Shadow       bool   `json:"shadow"`
+	Received     uint64 `json:"received_keys"`
+	Forwarded    uint64 `json:"forwarded_keys"`
+	Unsupported  uint64 `json:"unsupported_keys"`
+}
+
+type response struct {
+	OK     bool    `json:"ok"`
+	Error  string  `json:"error,omitempty"`
+	Status *Status `json:"status,omitempty"`
+}
+
 type Server struct {
 	path    string
 	handler Handler
 	ln      net.Listener
+	status  func() Status
+}
+
+func (s *Server) WithStatus(status func() Status) *Server {
+	s.status = status
+	return s
 }
 
 func New(path string, handler Handler) (*Server, error) {
@@ -36,12 +61,40 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
 		return fmt.Errorf("create control socket directory: %w", err)
 	}
-	_ = os.Remove(s.path)
+	// Serialize stale-socket recovery as well as normal endpoint ownership.
+	// Keep the lock file's inode after shutdown so contenders cannot lock a
+	// replacement inode while another server is still using the old one.
+	lock, err := os.OpenFile(s.path+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return fmt.Errorf("open control lock: %w", err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return fmt.Errorf("control endpoint already owned: %w", err)
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	listener, err := net.Listen("unix", s.path)
+	if errors.Is(err, syscall.EADDRINUSE) {
+		// Recover only a stale socket. Never unlink a live daemon's endpoint,
+		// a regular file, or a socket that failed for a permissions reason.
+		conn, dialErr := net.DialTimeout("unix", s.path, time.Second)
+		if dialErr == nil {
+			_ = conn.Close()
+			return errors.New("control socket is already owned by a running daemon")
+		}
+		info, statErr := os.Lstat(s.path)
+		if errors.Is(dialErr, syscall.ECONNREFUSED) && statErr == nil && info.Mode()&os.ModeSocket != 0 {
+			if err := os.Remove(s.path); err != nil {
+				return fmt.Errorf("remove stale control socket: %w", err)
+			}
+			listener, err = net.Listen("unix", s.path)
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("listen on control socket: %w", err)
 	}
 	s.ln = listener
+	defer listener.Close()
 	if err := os.Chmod(s.path, 0600); err != nil {
 		_ = listener.Close()
 		return fmt.Errorf("protect control socket: %w", err)
@@ -49,7 +102,6 @@ func (s *Server) Run(ctx context.Context) error {
 	go func() {
 		<-ctx.Done()
 		_ = listener.Close()
-		_ = os.Remove(s.path)
 	}()
 	for {
 		conn, err := listener.Accept()
@@ -65,38 +117,66 @@ func (s *Server) Run(ctx context.Context) error {
 
 func (s *Server) handle(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		log.Printf("control socket deadline: %v", err)
+		return
+	}
 	var request struct {
-		Action string `json:"action"`
+		Command string `json:"command"`
+		Action  string `json:"action"`
 	}
-	response := map[string]any{"ok": false}
+	reply := response{}
 	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&request); err != nil {
-		response["error"] = err.Error()
+		reply.Error = err.Error()
+	} else if request.Command == "status" && s.status != nil {
+		status := s.status()
+		reply.OK, reply.Status = true, &status
+	} else if request.Command != "" && request.Command != "key" {
+		reply.Error = "unsupported command"
 	} else if err := s.handler(ctx, cec.Action(strings.ToLower(strings.TrimSpace(request.Action)))); err != nil {
-		response["error"] = err.Error()
+		reply.Error = err.Error()
 	} else {
-		response["ok"] = true
+		reply.OK = true
 	}
-	_ = json.NewEncoder(conn).Encode(response)
+	if err := json.NewEncoder(conn).Encode(reply); err != nil {
+		log.Printf("control socket reply: %v", err)
+	}
 }
 
 func Send(path string, action cec.Action) error {
-	conn, err := net.Dial("unix", path)
+	_, err := exchange(path, map[string]string{"command": "key", "action": string(action)})
+	return err
+}
+
+func ReadStatus(path string) (Status, error) {
+	reply, err := exchange(path, map[string]string{"command": "status"})
 	if err != nil {
-		return err
+		return Status{}, err
+	}
+	if reply.Status == nil {
+		return Status{}, errors.New("daemon did not return live status")
+	}
+	return *reply.Status, nil
+}
+
+func exchange(path string, request map[string]string) (response, error) {
+	conn, err := net.DialTimeout("unix", path, time.Second)
+	if err != nil {
+		return response{}, err
 	}
 	defer conn.Close()
-	if err := json.NewEncoder(conn).Encode(map[string]string{"action": string(action)}); err != nil {
-		return err
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return response{}, err
 	}
-	var response struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
+	if err := json.NewEncoder(conn).Encode(request); err != nil {
+		return response{}, err
 	}
-	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&response); err != nil {
-		return err
+	var reply response
+	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&reply); err != nil {
+		return response{}, err
 	}
-	if !response.OK {
-		return errors.New(response.Error)
+	if !reply.OK {
+		return response{}, errors.New(reply.Error)
 	}
-	return nil
+	return reply, nil
 }

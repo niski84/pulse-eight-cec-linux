@@ -1,29 +1,36 @@
-# Compatibility Matrix
+# Compatibility
 
-This project separates hardware validation from desktop integration. A row is
-only marked working after a real adapter and HDMI path have been tested.
+## Evidence boundary
 
-## Tested configuration
+The standalone daemon is **not yet validated with a physical TV remote**.
+Automated subprocess tests establish frame parsing, lifecycle behavior, local
+control, shadow operation, and key mapping. They do not establish HDMI routing,
+compositor delivery, adapter recovery, or usability in a particular application.
 
-| Component | Tested setup | Status |
-|---|---|---|
-| Adapter | Pulse-Eight USB HDMI-CEC adapter | Tested hardware |
-| OS | Ubuntu 24.04-based Linux | Tested host |
-| Session | Plasma Bigscreen, Wayland | Tested desktop |
-| TV | HDMI-CEC television | Tested display class |
-| Output | `/dev/uinput` virtual keyboard | Working reference |
+## Reference hardware
 
-## Target validation
+The existing HTPC uses a Pulse-Eight USB adapter (USB `2548:1002`, firmware 12),
+libCEC 6.0.2, KDE neon on Ubuntu 24.04, Plasma Bigscreen/Wayland, and an LG TV.
+Remote navigation worked through a separately patched Plasma input handler and
+its uinput backend. That is evidence for the hardware path and the Plasma
+handler, not for this standalone daemon.
 
-| Environment | Status | Notes |
-|---|---|---|
-| KDE Plasma Wayland | Validated | uinput input path |
-| KDE Plasma X11 | Planned | Validate uinput delivery |
-| GNOME Wayland | Planned | Validate compositor media-key handling |
-| XFCE X11 | Planned | Validate keyboard navigation and media keys |
-| Kodi | Planned | No Kodi dependency in the core |
-| Plex | Planned | Validate playback and navigation keys |
-| Plexamp | Planned | Document application-specific limitations |
+On September 26, 2026, this standalone daemon opened the adapter and accepted a
+synthetic CEC transmission, but physical remote input was not forwarded. It was
+disabled and the Plasma handler restored. The unreleased repair corrects the
+receive-direction parser and must repeat the hardware validation.
 
-Report new results with adapter firmware, distribution version, desktop
-session, HDMI topology, and the exact key behavior observed.
+## Pending validation
+
+- Reference HTPC: physical Up, Down, Left, Right, Select, and media keys to uinput.
+- Reference HTPC: compositor delivery and foreground application behavior.
+- USB disconnect/reconnect and service restart without duplicate ownership.
+- Actual suspend/resume, including a child connection that stays alive but stale.
+- KDE X11, GNOME Wayland, XFCE X11, and other distributions.
+- Kodi and Plex application behavior; avoid their own CEC ownership conflicts.
+- Plexamp media shortcuts; its UI need not respond to D-pad navigation.
+- Real `arm64` hardware. Cross-compilation alone is not runtime validation.
+
+Report results with the software revision, adapter firmware, OS/session, TV/AVR
+models, HDMI topology, and exact behavior. Follow [the test and rollback
+procedure](docs/SHADOW-VALIDATION.md) before replacing a working handler.

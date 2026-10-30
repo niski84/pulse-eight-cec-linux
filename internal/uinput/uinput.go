@@ -28,8 +28,8 @@ const (
 	keyVolumeDown   = 114
 	keyVolumeUp     = 115
 	keyPower        = 116
-	keyPause        = 119
-	keyStop         = 128
+	keyPause        = 201 // KEY_PAUSECD: media pause, not the keyboard Pause key
+	keyStop         = 166 // KEY_STOPCD: media stop, not the browser/application Stop key
 	keyMenu         = 139
 	keyNextSong     = 163
 	keyPlayPause    = 164

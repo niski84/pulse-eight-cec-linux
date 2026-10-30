@@ -1,20 +1,17 @@
-# CEC Key Map
+# CEC key map
 
-The final map will translate libCEC user-control codes to Linux evdev keys.
-These are the initial interoperability targets:
+Supported incoming User Control Pressed frames use opcode 0x44. The operand is
+mapped to Linux evdev; each supported incoming press produces one press/release
+pair. Held state is not preserved. Unsupported operands are logged and counted.
 
-| Remote action | Linux event |
-|---|---|
-| Up / Down / Left / Right | `KEY_UP` / `KEY_DOWN` / `KEY_LEFT` / `KEY_RIGHT` |
-| Select / OK | `KEY_ENTER` |
-| Back / Return | `KEY_ESC` or `KEY_BACK` |
-| Play / Pause | `KEY_PLAYPAUSE` |
-| Stop | `KEY_STOP` |
-| Volume Up / Down | `KEY_VOLUMEUP` / `KEY_VOLUMEDOWN` |
-| Mute | `KEY_MUTE` |
-| Home / Menu | `KEY_HOME` / `KEY_MENU` |
+- Select 0x00 → KEY_ENTER; Up/Down/Left/Right 0x01–0x04 → direction keys.
+- Root/Setup/Contents Menu 0x09–0x0b → KEY_MENU; Exit 0x0d → KEY_ESC.
+- Play 0x44 → KEY_PLAY; Stop 0x45 → KEY_STOPCD; Pause 0x46 → KEY_PAUSECD.
+- Record/Rewind/Fast Forward 0x47–0x49 → corresponding media keys.
+- Next/Previous 0x4b/0x4c → KEY_NEXTSONG/KEY_PREVIOUSSONG.
+- Power 0x40 → KEY_POWER; Volume Up/Down 0x41/0x42 → volume keys; Mute 0x43 → KEY_MUTE.
 
-CEC key presses use the standard User Control Pressed opcode `0x44`. The Play
-operand is `0x44` and the Pause operand is `0x46`; they are not a universal
-toggle. The daemon should emit the Linux media key directly rather than asking
-applications to understand raw CEC frames.
+CEC Play 0x44 and Pause 0x46 are distinct commands, not a universal toggle.
+The keyboard Pause key (119) and application Stop key (128) are not the media
+Pause (201) and Stop (166) keys. Color buttons and multi-operand play functions
+are not currently mapped. TV/compositor/application behavior requires testing.
