@@ -16,7 +16,10 @@ func NewServer() http.Handler {
 	// route doubles as its description in scene-runner's endpoint browser, so
 	// keep one short sentence here describing what every endpoint does.
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
-		respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "pulse-eight-cec-linux"})
+		respondJSON(w, http.StatusOK, map[string]string{
+			"status": "ok", "service": "pulse-eight-cec-linux", "mode": "health-server",
+			"hardware_status": "not_checked",
+		})
 	})
 
 	// Browser-tab icon. Served from the embedded web/ tree so the app shows a

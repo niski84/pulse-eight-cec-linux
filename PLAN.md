@@ -25,6 +25,27 @@
 
 ## Phase 3 — distribution
 
+### Unreleased repair — 2026-10-29
+
+- [x] Parse incoming `>>` frames directed to registered local addresses; ignore transmitted traffic.
+- [x] Require registration and ready prompt, propagate child failures, bound shutdown, and test reopen.
+- [x] Make synthetic CLI keys local uinput events; never open a competing adapter as fallback.
+- [x] Add shadow mode and live receive/forward/unmapped counters.
+- [x] Use Linux media Pause/Stop keys and skip unsupported remote codes without crashing.
+- [x] Protect live socket ownership and recover stale endpoints.
+- [x] Leave installation stopped; support builds outside the module and packaged binary installation.
+- [x] Correct compatibility claims and distinguish HTTP liveness from daemon/device status.
+- [x] Add race-enabled subprocess/CLI tests and mocked installer checks.
+- [ ] Repeat physical remote-to-desktop and disconnect/reconnect testing.
+- [ ] Test actual suspend/resume; automatic detection of a live-but-stale child remains unimplemented.
+- [ ] Compare kernel CEC input and cec-sync on the reference HTPC before making uniqueness claims.
+
+The changes are prepared for review. They have not replaced the HTPC's working
+handler, and no repaired stable release has been validated. The original
+v0.1.0 failure below remains historical evidence, not a new test result.
+
+### Packaging checklist
+
 - [ ] Validate Debian/Ubuntu, Fedora, Arch, and Nix installation
 - [x] Build portable `amd64` and `arm64` artifacts
 - [ ] Generate `.deb`, `.rpm`, Arch, and Nix packages

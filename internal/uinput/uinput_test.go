@@ -32,7 +32,8 @@ func TestKeyMapping(t *testing.T) {
 		want uint16
 	}{
 		{name: "select", cec: cec.KeySelect, want: keyEnter},
-		{name: "pause", cec: cec.KeyPause, want: keyPause},
+		{name: "media pause", cec: cec.KeyPause, want: 201},
+		{name: "media stop", cec: cec.KeyStop, want: 166},
 		{name: "volume up", cec: cec.KeyVolumeUp, want: keyVolumeUp},
 		{name: "mute", cec: cec.KeyMute, want: keyVolumeMute},
 	}

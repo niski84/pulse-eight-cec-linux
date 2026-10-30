@@ -1,72 +1,56 @@
 # Architecture
 
-## Goals
+## Purpose and prior motivation
 
-The service must make the Pulse-Eight adapter useful without requiring KDE,
-Plasma Bigscreen, Kodi, or a particular application. It owns the adapter and
-publishes normalized input events to the Linux desktop.
+The reference HTPC had CEC adapter contention, repeated-open failures, stale
+post-suspend connections, and inconsistent portal input delivery. Its working
+fix was a patched Plasma handler using uinput. This project attempts to package
+the input bridge independently of that KDE implementation.
 
-## Components
+This motivation does not establish that a new daemon was required. Kernel CEC
+input and cec-sync are alternatives whose reference-host behavior has not been
+compared. The project reuses libCEC rather than reimplementing the USB protocol.
 
-```text
-libCEC adapter session
-        │
-        ▼
-CEC event decoder ──► key map ──► uinput keyboard/media device
-        │                    └──► optional desktop adapter
-        ▼
-Unix control socket ◄── pulse-eight-cecctl and local integrations
-```
+## Current data path
 
-### Adapter session
+`remote → CEC adapter → libCEC cec-client → inbound frame filter → key map → uinput → application`
 
-The adapter session is the only component allowed to open the Pulse-Eight USB
-device. The current portable transport owns one long-lived `cec-client` process,
-which uses the installed libCEC utility; a direct library binding can replace
-that transport without changing the core contract. It owns discovery, logical-
-address registration, hotplug recovery, and clean shutdown. Opening the adapter
-twice is a known failure mode and is prevented by the session state machine.
+The transport runs one long-lived `cec-client -t r` process. It requests NOTICE
+and TRAFFIC output, waits for registered logical addresses plus the ready prompt,
+and only emits complete incoming `TRAFFIC ... >> ...:44:...` presses directed to
+those registered addresses. Transmitted `<<` frames, debug descriptions, other
+CEC destinations, and malformed frames are ignored. This prevents self-echo and
+duplicate decoding. Each supported press produces one keyboard press/release;
+continuous held-key state is not currently preserved.
 
-### Input output
+Process generations own their channels and child lifecycle. Startup has a
+30-second bound; shutdown has a two-second grace period followed by a process
+group kill. Subprocess, scanner, and overflow errors are surfaced. Unknown CEC
+keys are logged and counted without crashing the input service.
 
-The default output is `/dev/uinput`. It produces ordinary Linux key events such
-as `KEY_UP`, `KEY_ENTER`, `KEY_PLAYPAUSE`, `KEY_VOLUMEUP`, and `KEY_VOLUMEDOWN`.
-This is the compatibility layer: Wayland compositors, X11 desktops, media
-centers, and desktop applications can consume the same events without knowing
-anything about HDMI-CEC.
+## Output and local control
 
-### Control socket
+Normal mode creates a Linux uinput virtual keyboard. Shadow mode uses the same
+receive path but logs keys without opening uinput. Shadow mode still owns the
+adapter exclusively.
 
-The Unix socket is local-only and supports key injection through the daemon's
-already-open adapter. It is mode `0600`; it must not expose the adapter or
-arbitrary shell execution over TCP. Applications that need remote control should
-integrate with their own authenticated service and call the local CLI or socket.
+The private Unix socket provides `key` and `status`. `key` targets the local
+virtual keyboard, not the CEC bus. The CLI never opens an adapter as a fallback.
+Status reports the running bridge's readiness and counters, not hardware
+validation. The socket is mode `0600`; an exclusive lock protects endpoint
+ownership and stale-socket recovery.
 
-## Desktop support
+The optional HTTP server is a separate development liveness service. Both the
+scaffold mux and command entrypoint use the same handler, bound to loopback.
+Its health response explicitly says hardware was not checked.
 
-| Environment | Primary path | Fallback |
-|---|---|---|
-| KDE Plasma / Bigscreen | uinput | desktop-specific integration if needed |
-| GNOME Wayland | uinput | none planned initially |
-| XFCE / other X11 | uinput | XTest only if explicitly enabled |
-| Kodi | uinput | optional Kodi integration later |
-| Plex / Plexamp | uinput media keys | application-specific notes |
+## Recovery boundary
 
-The core must never import KDE, Qt, Plasma, or a media-center SDK. Those belong
-in optional adapters or documentation.
+The user service restarts failed processes after three seconds, including an
+unexpectedly exited `cec-client`. This is distinct from detecting a live but
+stale connection after resume. Automatic detection/recovery of that condition
+is not implemented or claimed. Real hotplug and sleep tests remain pending.
 
-## Lifecycle
-
-The user service starts after the graphical session, claims the adapter, creates
-the virtual input device, and retries transient USB/CEC failures with backoff.
-After suspend or resume it must reopen the adapter exactly once. A diagnostic
-command can temporarily stop the service, but normal applications must never
-need to compete for the serial device.
-
-## Compatibility boundary
-
-The runtime depends on libCEC for adapter discovery and CEC transport, and on
-Linux uinput for desktop input delivery. It does not depend on a specific USB
-product ID, tty name, desktop shell, compositor, media center, or television
-model. An explicit `P8CEC_DEVICE` path is available only for hosts with more
-than one adapter.
+Applications must support the emitted keys. Compositor policies and application
+shortcuts still apply; uinput does not add D-pad navigation to an app that lacks
+it. No KDE, Qt, Kodi, or Plex SDK is part of the core.

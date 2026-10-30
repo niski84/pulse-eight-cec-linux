@@ -1,103 +1,126 @@
-<div align="center">
+# pulse-eight-cec-linux
 
-# 📺 pulse-eight-cec-linux
+Use a TV remote as a Linux keyboard through a Pulse-Eight USB HDMI-CEC adapter.
+The service is intended for navigation and media keys across desktop applications,
+without requiring Kodi or Plasma Bigscreen.
 
-### A desktop-neutral Linux input bridge for Pulse-Eight USB HDMI-CEC adapters.
+## Status: experimental, hardware validation pending
 
-[![Release](https://img.shields.io/github/v/release/niski84/pulse-eight-cec-linux?style=flat-square)](https://github.com/niski84/pulse-eight-cec-linux/releases)
-[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg?style=flat-square)](LICENSE)
+The published **v0.1.0** has a receive-direction bug: it parses transmitted CEC
+traffic instead of received remote presses. Its recorded hardware trial failed
+and the previously working Plasma handler was restored. Do not treat that release
+as a validated replacement for an existing input handler.
 
-</div>
+The unreleased repair adds inbound parsing, startup and shutdown checks, local
+keyboard injection, live status, and a shadow mode. Automated process and installer
+tests pass; physical remote-to-desktop, hotplug, and suspend/resume validation are
+still required. See [compatibility](COMPATIBILITY.md) and the
+[hardware test procedure](docs/SHADOW-VALIDATION.md).
 
----
+## How it fits
 
-Pulse-Eight adapters are excellent hardware, but Linux desktop integration is often
-left to a particular desktop shell or media center. This project provides one
-small, stable service that turns HDMI-CEC remote events into normal Linux input
-events and exposes a local control interface for applications.
+`TV remote → HDMI-CEC → Pulse-Eight adapter → libCEC/cec-client → this service → Linux uinput → desktop/application`
 
-The service connects this standard Linux input path:
+We reuse Pulse-Eight's Linux software to communicate with the adapter. Our code
+supplies a small input mapper, virtual keyboard, user service, and local control
+socket. An application must support the resulting keyboard/media keys; this
+cannot make a mouse-only interface navigable by D-pad.
 
-```
-LG remote → HDMI-CEC → Pulse-Eight USB adapter → libCEC → uinput → Linux desktop/app
-```
+Existing alternatives include:
 
-It is designed for KDE Plasma, GNOME, XFCE, X11, Wayland, Kodi, Plex, and other
-applications that understand standard keyboard or media-key events.
+- [Kodi's built-in libCEC integration](https://libcec.pulse-eight.com/FAQ), for controlling Kodi.
+- [Linux's CEC subsystem](https://docs.kernel.org/admin-guide/media/cec.html), using `pulse8-cec`, `inputattach`, and `cec-ctl` as an alternative adapter/input path.
+- [cec-sync](https://gitlab.com/kira-bruneau/cec-sync), for Linux home-theater integration, including documented Steam Deck input support.
 
-## What it provides
+These alternatives have not been compared on the reference HTPC. This project
+does not claim to be the first or only system-wide Linux CEC solution.
 
-- Pulse-Eight USB adapter access with exclusive ownership
-- CEC remote-key decoding through libCEC
-- Desktop-neutral `/dev/uinput` keyboard/media-key output
-- Optional desktop-specific fallbacks where uinput is unavailable
-- Local CLI and Unix-socket control for diagnostics and synthetic keys
-- User-level systemd service with restart and adapter-lock guidance
-- Reproducible portable Linux release artifacts
+## Install without starting the service
 
-## Status
+Requirements: Linux, systemd user services, and libCEC's `cec-client` (typically
+provided by `cec-utils`). A source build also needs Go 1.23 or later.
 
-The first public release provides a user-level daemon, automatic libCEC adapter
-selection, Linux uinput output, and a local control socket. It is independent of
-KDE, GNOME, Kodi, Plex, X11, and Wayland.
-
-## Install
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/niski84/pulse-eight-cec-linux/master/scripts/install.sh | bash
-```
-
-Or download a portable archive from the [GitHub releases page](https://github.com/niski84/pulse-eight-cec-linux/releases).
-
-## Hardware and permissions
-
-The service asks libCEC to discover the first connected supported adapter. It
-does not require a fixed `/dev/ttyACM*` path or product ID. Set `P8CEC_DEVICE`
-only when a system has multiple adapters and a specific stable device path is
-needed.
-
-Only one process may own the adapter at a time. Do not run `cec-client` while the
-service is active; use `pulse-eight-cecctl status` instead. Adapter selection is
-delegated to libCEC.
-
-## Configuration
-
-The service is intentionally local-only. Configuration covers:
-
-| Setting | Purpose |
-|---|---|
-| `P8CEC_DEVICE` | Optional adapter path; unset means automatic discovery |
-| `P8CEC_INPUT_BACKEND` | `uinput` by default; optional fallback backends later |
-| `P8CEC_SOCKET` | Unix control socket path |
-| `P8CEC_LOG_LEVEL` | `error`, `warn`, `info`, or `debug` |
-| `P8CEC_OSD_NAME` | CEC device name shown during discovery |
-
-## Troubleshooting
+For the unreleased repair, use its source checkout:
 
 ```bash
-systemctl --user status pulse-eight-cec
+bash scripts/install.sh
+```
+
+Run the installer as your normal desktop user. It installs the binary, CLI alias,
+and user service, but does not start it, change boot enablement, stop another
+handler, or alter device permissions. If this service is already running, the
+installer asks you to stop it before replacing the binary.
+
+Future portable archives containing this repair include the same installer and
+service/udev files. After extracting one, run `bash scripts/install.sh` from the
+archive. Go is not required for the binary archive. The old v0.1.0 archives do not
+contain this repaired packaging.
+
+The installer prints the optional administrator command for installing the
+permission rule. Confirm access to the adapter and `/dev/uinput`; new group
+membership may require a new login. Do not run the bridge as root.
+
+## Validate before enabling
+
+Only one process may own the adapter. Schedule a test window, record the current
+handler and its rollback command, and stop that handler before running:
+
+```bash
+pulse-eight-cec daemon --shadow
+```
+
+Shadow mode claims the adapter and logs decoded keys, but never opens uinput or
+injects keys. It is not a passive observer that can run beside another handler.
+In another terminal:
+
+```bash
 pulse-eight-cecctl status
+```
+
+Press real remote buttons and confirm the receive counter changes. Then follow
+the [hardware test procedure](docs/SHADOW-VALIDATION.md) for normal input and
+recovery tests. Enable at boot only after that validation:
+
+```bash
+systemctl --user enable --now pulse-eight-cec.service
+```
+
+## Local controls
+
+```bash
+pulse-eight-cecctl status
+pulse-eight-cecctl key pause
 journalctl --user -u pulse-eight-cec -f
 ```
 
-Common causes of failure are a second process holding the adapter, a stale
-post-suspend libCEC connection, missing `uinput` permissions, or an HDMI path
-that does not route CEC. See `docs/TROUBLESHOOTING.md` for recovery steps.
+`status` queries the running daemon and reports adapter/input readiness, shadow
+mode, and received/forwarded/unmapped key counts. It exits unsuccessfully when no
+daemon responds. Installed prerequisites are reported separately.
 
-## Documentation
+`key` injects a key into the daemon's local virtual keyboard. It does not send a
+CEC command to the TV and never opens a second adapter. It fails when the daemon
+is unavailable or in shadow mode. A synthetic key does not validate TV reception.
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Development](docs/DEVELOPMENT.md)
-- [Distribution and release plan](docs/DISTRIBUTION.md)
-- [Troubleshooting](docs/TROUBLESHOOTING.md)
-- [CEC key map](docs/KEY-MAP.md)
+The optional `serve` command is only the development health server. Its HTTP
+liveness response does not indicate that the adapter or keyboard is working.
 
-## Releases
+## Configuration
 
-Tagged releases publish checksummed portable Linux archives for `amd64` and
-`arm64`. Native distribution packages and additional desktop validation can be
-added without changing the runtime interface.
+- `P8CEC_DEVICE`: optional adapter path; unset uses libCEC discovery.
+- `P8CEC_BINARY`: path to `cec-client`.
+- `P8CEC_DEBUG`: libCEC log mask; NOTICE and TRAFFIC are always enabled for parsing.
+- `P8CEC_SOCKET`: local Unix socket; defaults to the user runtime directory.
+- `P8CEC_UINPUT`: virtual-input device path, normally `/dev/uinput`.
 
-## License
+Use `systemctl --user edit pulse-eight-cec` to set service environment overrides.
+The control socket is local-only and mode `0600`. Adapter discovery is delegated
+to libCEC; a stable explicit path is useful when several adapters are attached.
 
-MIT. See `LICENSE`.
+## Documentation and license
+
+[Architecture](docs/ARCHITECTURE.md) · [Development](docs/DEVELOPMENT.md) ·
+[Distribution](docs/DISTRIBUTION.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) ·
+[Key map](docs/KEY-MAP.md) · [Compatibility](COMPATIBILITY.md)
+
+MIT; see [LICENSE](LICENSE). GitHub releases provide checksummed Linux `amd64`
+and `arm64` archives. Architecture builds are not hardware compatibility tests.
