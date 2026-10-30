@@ -10,3 +10,7 @@ import (
 func Open(string) (*Device, error) {
 	return nil, errors.New("uinput: Linux is required")
 }
+
+func OpenWithKeys(string, []uint16) (*Device, error) {
+	return nil, errors.New("uinput: Linux is required")
+}

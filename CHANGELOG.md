@@ -1,5 +1,18 @@
 # Changes
 
+## Unreleased activity profiles — 2026-10-30
+
+Add explicit, switchable activity profiles with key chords and suppression,
+shared by remote and synthetic CLI input. Add a private-socket decision trace
+and hardware-free `explain` preview. Configuration is validated before devices
+open, and profile changes do not reopen the adapter. Chords release keys in
+reverse order and attempt cleanup after output errors.
+
+This is an application-level policy feature, not a new CEC driver. It could
+operate above a future kernel backend. Automatic app detection, gestures,
+player-specific routing, and kernel-input support remain proposals. Real
+remote/compositor validation is still pending.
+
 ## Unreleased repair — 2026-10-29
 
 Fix received TV-remote input being ignored because v0.1.0 decoded outgoing CEC

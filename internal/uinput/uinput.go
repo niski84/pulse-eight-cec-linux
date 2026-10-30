@@ -108,6 +108,7 @@ type Device struct {
 	output  output
 	destroy func() error
 	closed  bool
+	keys    map[uint16]bool
 }
 
 func newDevice(output output, destroy func() error) *Device {
@@ -137,30 +138,79 @@ func (d *Device) Close() error {
 	return nil
 }
 
-func (d *Device) sendKey(key uint16) error {
+// SendChord presses modifiers first and releases the complete chord in reverse
+// order. The device lock keeps simultaneous remote/CLI actions from interleaving.
+func (d *Device) SendChord(keys []uint16) (sendErr error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.closed {
 		return errors.New("uinput: device is closed")
 	}
-
-	stamp := time.Now()
-	for _, event := range []inputEvent{
-		{seconds: stamp.Unix(), microseconds: int64(stamp.Nanosecond() / 1000), eventType: eventTypeKey, code: key, value: 1},
-		{seconds: stamp.Unix(), microseconds: int64(stamp.Nanosecond() / 1000), eventType: eventTypeSync, code: syncReport},
-		{seconds: stamp.Unix(), microseconds: int64(stamp.Nanosecond() / 1000), eventType: eventTypeKey, code: key, value: 0},
-		{seconds: stamp.Unix(), microseconds: int64(stamp.Nanosecond() / 1000), eventType: eventTypeSync, code: syncReport},
-	} {
-		if err := writeInputEvent(d.output, event); err != nil {
-			return fmt.Errorf("send evdev key %d: %w", key, err)
+	if len(keys) == 0 || len(keys) > 8 {
+		return errors.New("uinput: a chord requires 1 to 8 keys")
+	}
+	seen := make(map[uint16]bool)
+	ordered := make([]uint16, 0, len(keys))
+	for _, key := range keys {
+		if key == 0 || key > 0x2ff || seen[key] {
+			return fmt.Errorf("uinput: invalid or duplicate key %d", key)
 		}
+		if d.keys != nil && !d.keys[key] {
+			return fmt.Errorf("uinput: key %d was not enabled on this keyboard", key)
+		}
+		seen[key] = true
+		if isModifier(key) {
+			ordered = append(ordered, key)
+		}
+	}
+	for _, key := range keys {
+		if !isModifier(key) {
+			ordered = append(ordered, key)
+		}
+	}
+	stamp := time.Now()
+	write := func(kind, code uint16, value int32) error {
+		return writeInputEvent(d.output, inputEvent{
+			seconds: stamp.Unix(), microseconds: int64(stamp.Nanosecond() / 1000),
+			eventType: kind, code: code, value: value,
+		})
+	}
+	pressed := make([]uint16, 0, len(ordered))
+	defer func() {
+		// Try to release every attempted key, even when the output failed part
+		// way through a chord. Return cleanup failures alongside the first error.
+		for i := len(pressed) - 1; i >= 0; i-- {
+			if err := write(eventTypeKey, pressed[i], 0); err != nil {
+				sendErr = errors.Join(sendErr, fmt.Errorf("release key %d: %w", pressed[i], err))
+			}
+		}
+		if err := write(eventTypeSync, syncReport, 0); err != nil {
+			sendErr = errors.Join(sendErr, fmt.Errorf("sync key release: %w", err))
+		}
+	}()
+	for _, key := range ordered {
+		pressed = append(pressed, key)
+		if err := write(eventTypeKey, key, 1); err != nil {
+			return fmt.Errorf("press key %d: %w", key, err)
+		}
+	}
+	if err := write(eventTypeSync, syncReport, 0); err != nil {
+		return fmt.Errorf("sync key press: %w", err)
 	}
 	return nil
 }
 
+func isModifier(key uint16) bool {
+	switch key {
+	case 29, 97, 42, 54, 56, 100, 125, 126:
+		return true
+	}
+	return false
+}
+
 // SendKey emits a press and release for a standard evdev key code.
 func (d *Device) SendKey(key uint16) error {
-	return d.sendKey(key)
+	return d.SendChord([]uint16{key})
 }
 
 // SendKeyCode maps a CEC key and emits the corresponding Linux event.
@@ -169,7 +219,7 @@ func (d *Device) SendKeyCode(key cec.KeyCode) error {
 	if !ok {
 		return fmt.Errorf("uinput: unknown CEC key 0x%02x", uint8(key))
 	}
-	return d.sendKey(evdevKey)
+	return d.SendKey(evdevKey)
 }
 
 // SendAction maps and emits an application action.
@@ -178,5 +228,5 @@ func (d *Device) SendAction(action cec.Action) error {
 	if !ok {
 		return fmt.Errorf("uinput: unknown action %q", action)
 	}
-	return d.sendKey(key)
+	return d.SendKey(key)
 }

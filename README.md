@@ -4,6 +4,12 @@ Use a TV remote as a Linux keyboard through a Pulse-Eight USB HDMI-CEC adapter.
 The service is intended for navigation and media keys across desktop applications,
 without requiring Kodi or Plasma Bigscreen.
 
+The project grew out of unreliable remote input when changing applications on a
+Linux HTPC. Its new focus is explicit activity profiles and explainable input
+decisions above the adapter layer. See [the rationale and feature roadmap](docs/CONTROL-LAYER.md)
+for what this adds beyond a plain kernel keymap, what already exists elsewhere,
+and which capabilities are still proposals.
+
 ## Status: experimental, hardware validation pending
 
 The published **v0.1.0** has a receive-direction bug: it parses transmitted CEC
@@ -87,6 +93,42 @@ systemctl --user enable --now pulse-eight-cec.service
 
 ## Local controls
 
+### Activity profiles and input explanations (unreleased)
+
+Profiles let the same remote button emit different key combinations for a chosen
+activity, or be deliberately ignored. For example, Back can emit Escape in the
+desktop profile and Alt+Left in the browser profile. Unspecified bindings inherit
+the existing defaults. These are explicit activity selections; the daemon does
+not detect the foreground application or focus a chosen window.
+
+Preview the bundled example without opening an adapter or keyboard:
+
+```bash
+go run ./cmd/pulse-eight-cec-linux explain --config examples/profiles.json --profile browser exit
+```
+
+During a scheduled hardware test, run the daemon with `--config` (or set
+`P8CEC_CONFIG` in its service environment), then use the private socket:
+
+```bash
+pulse-eight-cec daemon --shadow --config examples/profiles.json
+# In another terminal:
+pulse-eight-cecctl profiles
+pulse-eight-cecctl profile browser
+pulse-eight-cecctl trace --limit 10
+```
+
+Selecting a profile does not reopen the CEC adapter. The default profile is
+restored when the daemon restarts. The trace retains the latest 50 decisions in
+memory, with the input, profile, explicit/default binding, output keys, result,
+and explanation. It resets on restart. A `forwarded` result means input was
+written successfully, not that the application acted on it.
+
+See [configuration and limitations](docs/CONTROL-LAYER.md). Profile behavior is
+tested with simulated inputs; real remote/compositor validation remains pending.
+
+### Keyboard and service diagnostics
+
 ```bash
 pulse-eight-cecctl status
 pulse-eight-cecctl key pause
@@ -100,6 +142,10 @@ daemon responds. Installed prerequisites are reported separately.
 `key` injects a key into the daemon's local virtual keyboard. It does not send a
 CEC command to the TV and never opens a second adapter. It fails when the daemon
 is unavailable or in shadow mode. A synthetic key does not validate TV reception.
+Both real remote presses and synthetic keys use the selected profile; `key` also
+accepts raw operands such as `0x72` when a profile defines their behavior.
+An explicit ignore binding accepts the request without emitting input; inspect
+`trace` to see that outcome.
 
 The optional `serve` command is only the development health server. Its HTTP
 liveness response does not indicate that the adapter or keyboard is working.
@@ -111,6 +157,7 @@ liveness response does not indicate that the adapter or keyboard is working.
 - `P8CEC_DEBUG`: libCEC log mask; NOTICE and TRAFFIC are always enabled for parsing.
 - `P8CEC_SOCKET`: local Unix socket; defaults to the user runtime directory.
 - `P8CEC_UINPUT`: virtual-input device path, normally `/dev/uinput`.
+- `P8CEC_CONFIG`: optional JSON activity configuration, validated before devices open.
 
 Use `systemctl --user edit pulse-eight-cec` to set service environment overrides.
 The control socket is local-only and mode `0600`. Adapter discovery is delegated

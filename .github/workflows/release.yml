@@ -42,7 +42,7 @@ jobs:
             mkdir -p "dist/pulse-eight-cec-linux-$1-$2"
             CGO_ENABLED=0 GOOS=$1 GOARCH=$2 go build -trimpath -ldflags='-s -w' -o "dist/pulse-eight-cec-linux-$1-$2/pulse-eight-cec" ./cmd/pulse-eight-cec-linux
             cp README.md CHANGELOG.md LICENSE dist/pulse-eight-cec-linux-$1-$2/
-            cp -r packaging docs scripts dist/pulse-eight-cec-linux-$1-$2/
+            cp -r packaging docs scripts examples dist/pulse-eight-cec-linux-$1-$2/
             cp COMPATIBILITY.md dist/pulse-eight-cec-linux-$1-$2/
             ln -s pulse-eight-cec "dist/pulse-eight-cec-linux-$1-$2/pulse-eight-cecctl"
             tar -C dist -czf "dist/pulse-eight-cec-linux-$1-$2.tar.gz" "pulse-eight-cec-linux-$1-$2"

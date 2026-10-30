@@ -16,6 +16,13 @@ discovery.
 
 ## Validation environment
 
+Activity-policy tests use simulated button inputs and fake output callbacks.
+The daemon subprocess test switches profiles through the real Unix socket,
+then feeds another fake remote event and verifies its decision trace without
+opening uinput or restarting cec-client. Uinput tests inspect chord press/release
+order and cleanup after transient write failures. These checks are distinct
+from physical TV/compositor validation.
+
 Validation uses a Linux desktop with libCEC, a Pulse-Eight USB HDMI-CEC
 adapter, an HDMI-CEC display path, and `/dev/uinput`. Device paths, USB product
 identifiers, and credentials are not runtime requirements.
